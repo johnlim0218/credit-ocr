@@ -1,6 +1,6 @@
 /**
  * useCardScanner — 신용카드 스캐너 커스텀 훅
- * 카메라 → OpenCV 처리 → OCR → Luhn 검증 전체 파이프라인
+ * 카메라 → 촬영 → OpenCV 처리 → OCR → Luhn 검증
  */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { loadOpenCV } from "../utils/opencv-loader";
@@ -8,13 +8,11 @@ import { processFrame, extractGuidelineROI } from "../utils/image-processing";
 import { recognizeCardNumber, terminateOCR } from "../utils/ocr";
 import { validateLuhn, formatCardNumber } from "../utils/luhn";
 
-const SCAN_INTERVAL = 1500; // 1.5초 간격으로 스캔
-
 export function useCardScanner() {
   const [opencvLoaded, setOpencvLoaded] = useState(false);
   const [opencvLoading, setOpencvLoading] = useState(true);
   const [cameraReady, setCameraReady] = useState(false);
-  const [scanning, setScanning] = useState(false);
+  const [phase, setPhase] = useState("live"); // 'live' | 'preview' | 'processing' | 'result'
   const [recognizedText, setRecognizedText] = useState("");
   const [confirmedNumber, setConfirmedNumber] = useState("");
   const [error, setError] = useState("");
@@ -22,10 +20,10 @@ export function useCardScanner() {
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const scanTimerRef = useRef(null);
   const cvRef = useRef(null);
   const guidelineRef = useRef(null);
-  const isProcessingRef = useRef(false);
+  const capturedCanvasRef = useRef(null);
+  const capturedDimensionsRef = useRef(null);
 
   // OpenCV.js 로드
   useEffect(() => {
@@ -51,75 +49,112 @@ export function useCardScanner() {
     };
   }, []);
 
-  // 카메라 시작
-  const startCamera = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+  // OpenCV 로드 완료 시 카메라 자동 시작
+  useEffect(() => {
+    if (!opencvLoaded) return;
+    let cancelled = false;
+
+    navigator.mediaDevices
+      .getUserMedia({
         video: {
-          facingMode: "environment", // 후면 카메라 우선
+          facingMode: "environment",
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
+      })
+      .then((stream) => {
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          streamRef.current = stream;
+          setCameraReady(true);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err.name === "NotAllowedError") {
+          setError(
+            "카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라 권한을 허용해주세요.",
+          );
+        } else if (err.name === "NotFoundError") {
+          setError("카메라를 찾을 수 없습니다.");
+        } else {
+          setError("카메라 접근 오류: " + err.message);
+        }
       });
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        streamRef.current = stream;
-        setCameraReady(true);
-        setError("");
-      }
-    } catch (err) {
-      if (err.name === "NotAllowedError") {
-        setError(
-          "카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라 권한을 허용해주세요.",
-        );
-      } else if (err.name === "NotFoundError") {
-        setError("카메라를 찾을 수 없습니다.");
-      } else {
-        setError("카메라 접근 오류: " + err.message);
-      }
-    }
+    return () => {
+      cancelled = true;
+    };
+  }, [opencvLoaded]);
+
+  // 사진 촬영
+  const capturePhoto = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+
+    // 현재 프레임을 캔버스에 스냅샷
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+
+    capturedCanvasRef.current = canvas;
+    capturedDimensionsRef.current = {
+      clientWidth: video.clientWidth,
+      clientHeight: video.clientHeight,
+    };
+
+    // 비디오 일시정지 → 프리뷰로 표시
+    video.pause();
+    setPhase("preview");
+    setError("");
   }, []);
 
-  // OpenCV 로드 완료 시 카메라 자동 시작
-  useEffect(() => {
-    if (opencvLoaded) {
-      startCamera();
-    }
-  }, [opencvLoaded, startCamera]);
+  // 다시 촬영
+  const retake = useCallback(() => {
+    capturedCanvasRef.current = null;
+    capturedDimensionsRef.current = null;
+    setRecognizedText("");
+    setConfirmedNumber("");
+    setError("");
+    setCopied(false);
 
-  // 단일 프레임 스캔 처리
-  const scanFrame = useCallback(async () => {
+    if (videoRef.current) {
+      videoRef.current.play().catch(() => {});
+    }
+    setPhase("live");
+  }, []);
+
+  // 인식 실행
+  const recognize = useCallback(async () => {
     const cv = cvRef.current;
-    const video = videoRef.current;
+    const canvas = capturedCanvasRef.current;
+    const dims = capturedDimensionsRef.current;
 
-    if (
-      !cv ||
-      !video ||
-      !video.videoWidth ||
-      isProcessingRef.current ||
-      confirmedNumber
-    ) {
-      return;
-    }
+    if (!cv || !canvas) return;
 
-    isProcessingRef.current = true;
+    setPhase("processing");
+    setRecognizedText("");
+    setError("");
 
     try {
-      // 1차: 윤곽선 기반 카드 검출 시도
-      let roiCanvas = processFrame(cv, video, null);
+      // 1차: 윤곽선 기반 카드 검출
+      let roiCanvas = processFrame(cv, canvas);
 
-      // 2차: 실패 시 가이드라인 영역을 직접 추출
-      if (!roiCanvas && guidelineRef.current) {
-        roiCanvas = extractGuidelineROI(cv, video, guidelineRef.current);
+      // 2차: 가이드라인 ROI 영역 추출
+      if (!roiCanvas && guidelineRef.current && dims) {
+        roiCanvas = extractGuidelineROI(cv, canvas, guidelineRef.current, dims);
       }
 
       if (roiCanvas) {
-        // OCR 실행
         const text = await recognizeCardNumber(roiCanvas);
         setRecognizedText(text || "");
 
-        // 13~19자리 숫자 + Luhn 검증
         if (
           text &&
           text.length >= 13 &&
@@ -127,47 +162,34 @@ export function useCardScanner() {
           validateLuhn(text)
         ) {
           setConfirmedNumber(formatCardNumber(text));
-          setScanning(false);
-          stopScanLoop();
+          setPhase("result");
+          return;
         }
       }
+
+      setPhase("preview");
+      setError("카드 번호를 인식하지 못했습니다. 다시 촬영해주세요.");
     } catch (err) {
-      console.error("Scan error:", err);
-    } finally {
-      isProcessingRef.current = false;
-    }
-  }, [confirmedNumber]);
-
-  // 스캔 루프 시작
-  const startScanning = useCallback(() => {
-    if (scanning || confirmedNumber) return;
-
-    setScanning(true);
-    setRecognizedText("");
-
-    const loop = () => {
-      scanFrame();
-      scanTimerRef.current = setTimeout(loop, SCAN_INTERVAL);
-    };
-    loop();
-  }, [scanning, confirmedNumber, scanFrame]);
-
-  // 스캔 루프 중지
-  const stopScanLoop = useCallback(() => {
-    if (scanTimerRef.current) {
-      clearTimeout(scanTimerRef.current);
-      scanTimerRef.current = null;
+      console.error("Recognition error:", err);
+      setPhase("preview");
+      setError("인식 중 오류가 발생했습니다.");
     }
   }, []);
 
-  // 리셋
+  // 리셋 (결과 화면에서 처음으로)
   const reset = useCallback(() => {
-    stopScanLoop();
+    capturedCanvasRef.current = null;
+    capturedDimensionsRef.current = null;
     setConfirmedNumber("");
     setRecognizedText("");
-    setScanning(false);
+    setError("");
     setCopied(false);
-  }, [stopScanLoop]);
+
+    if (videoRef.current) {
+      videoRef.current.play().catch(() => {});
+    }
+    setPhase("live");
+  }, []);
 
   // 클립보드 복사
   const copyToClipboard = useCallback(async () => {
@@ -178,7 +200,6 @@ export function useCardScanner() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // fallback
       const textarea = document.createElement("textarea");
       textarea.value = confirmedNumber.replace(/\s/g, "");
       document.body.appendChild(textarea);
@@ -198,32 +219,26 @@ export function useCardScanner() {
   // Cleanup
   useEffect(() => {
     return () => {
-      stopScanLoop();
-
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
-
       terminateOCR();
     };
-  }, [stopScanLoop]);
+  }, []);
 
   return {
-    // 상태
     opencvLoaded,
     opencvLoading,
     cameraReady,
-    scanning,
+    phase,
     recognizedText,
     confirmedNumber,
     error,
     copied,
-
-    // Refs
     videoRef,
-
-    // 메서드
-    startScanning,
+    capturePhoto,
+    retake,
+    recognize,
     reset,
     copyToClipboard,
     setGuidelineRect,

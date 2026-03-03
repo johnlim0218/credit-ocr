@@ -13,13 +13,15 @@ function App() {
     opencvLoaded,
     opencvLoading,
     cameraReady,
-    scanning,
+    phase,
     recognizedText,
     confirmedNumber,
     error,
     copied,
     videoRef,
-    startScanning,
+    capturePhoto,
+    retake,
+    recognize,
     reset,
     copyToClipboard,
     setGuidelineRect,
@@ -60,16 +62,18 @@ function App() {
         {opencvLoaded && (
           <CameraView
             videoRef={videoRef}
-            scanning={scanning}
+            phase={phase}
             cameraReady={cameraReady}
             onGuidelineRect={setGuidelineRect}
-            onStartScan={startScanning}
+            onCapture={capturePhoto}
+            onRetake={retake}
+            onRecognize={recognize}
           />
         )}
 
         {/* 결과 표시 */}
         <ResultDisplay
-          scanning={scanning}
+          phase={phase}
           recognizedText={recognizedText}
           confirmedNumber={confirmedNumber}
           copied={copied}

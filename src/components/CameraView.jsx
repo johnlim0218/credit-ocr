@@ -2,13 +2,15 @@
  * CameraView — 카메라 뷰 + 카드 가이드라인 오버레이
  */
 import { useEffect, useRef, useCallback } from "react";
-import { ScanLine, Camera } from "lucide-react";
+import { Camera, RotateCcw, Loader2, ScanSearch } from "lucide-react";
 
 export default function CameraView({
   videoRef,
-  scanning,
+  phase,
   onGuidelineRect,
-  onStartScan,
+  onCapture,
+  onRetake,
+  onRecognize,
   cameraReady,
 }) {
   const containerRef = useRef(null);
@@ -20,7 +22,6 @@ export default function CameraView({
     const container = containerRef.current;
     const rect = container.getBoundingClientRect();
 
-    // 카드 가이드라인은 컨테이너 중앙, 가로 85%, 비율 1.586
     const guideWidth = rect.width * 0.85;
     const guideHeight = guideWidth / 1.586;
     const guideX = (rect.width - guideWidth) / 2;
@@ -32,11 +33,10 @@ export default function CameraView({
       width: guideWidth,
       height: guideHeight,
     });
-  }, [onGuidelineRect]);
+  }, [onGuidelineRect, videoRef]);
 
   useEffect(() => {
     if (cameraReady) {
-      // 비디오 로드 후 가이드라인 좌표 업데이트
       const timer = setTimeout(updateGuidelineRect, 500);
       window.addEventListener("resize", updateGuidelineRect);
       return () => {
@@ -86,17 +86,17 @@ export default function CameraView({
         </svg>
 
         {/* 카드 가이드라인 테두리 */}
-        <div className={`card-guideline ${scanning ? "scanning" : ""}`}>
-          {/* 코너 마커 */}
+        <div
+          className={`card-guideline ${phase === "processing" ? "scanning" : ""}`}
+        >
           <div className="corner corner-tl"></div>
           <div className="corner corner-tr"></div>
           <div className="corner corner-bl"></div>
           <div className="corner corner-br"></div>
 
-          {/* 스캔 라인 애니메이션 */}
-          {scanning && <div className="scan-line"></div>}
+          {phase === "processing" && <div className="scan-line"></div>}
 
-          {!scanning && cameraReady && (
+          {phase === "live" && cameraReady && (
             <div className="guideline-hint">
               <Camera size={20} />
               <span>카드를 이 영역에 맞춰주세요</span>
@@ -105,12 +105,34 @@ export default function CameraView({
         </div>
       </div>
 
-      {/* 스캔 시작 버튼 */}
-      {cameraReady && !scanning && (
-        <button className="scan-button" onClick={onStartScan}>
-          <ScanLine size={20} />
-          <span>스캔 시작</span>
+      {/* 촬영 버튼 — 라이브 모드 */}
+      {cameraReady && phase === "live" && (
+        <button className="capture-button" onClick={onCapture}>
+          <Camera size={24} />
+          <span>촬영</span>
         </button>
+      )}
+
+      {/* 프리뷰 모드 버튼 */}
+      {phase === "preview" && (
+        <div className="preview-actions">
+          <button className="preview-btn retake-btn" onClick={onRetake}>
+            <RotateCcw size={18} />
+            <span>다시 촬영</span>
+          </button>
+          <button className="preview-btn recognize-btn" onClick={onRecognize}>
+            <ScanSearch size={18} />
+            <span>인식하기</span>
+          </button>
+        </div>
+      )}
+
+      {/* 처리 중 오버레이 */}
+      {phase === "processing" && (
+        <div className="processing-overlay">
+          <Loader2 size={36} className="spin-icon" />
+          <span>카드 번호 인식 중...</span>
+        </div>
       )}
     </div>
   );

@@ -4,7 +4,7 @@
 import { Copy, Check, RotateCcw, CreditCard, Loader2 } from "lucide-react";
 
 export default function ResultDisplay({
-  scanning,
+  phase,
   recognizedText,
   confirmedNumber,
   copied,
@@ -13,10 +13,10 @@ export default function ResultDisplay({
 }) {
   return (
     <div className="result-container">
-      {/* 실시간 인식 텍스트 */}
+      {/* 상태 라벨 */}
       <div className="result-section">
         <div className="result-label">
-          {scanning ? (
+          {phase === "processing" ? (
             <>
               <Loader2 size={16} className="spin-icon" />
               <span>인식 중...</span>
@@ -34,7 +34,7 @@ export default function ResultDisplay({
           )}
         </div>
 
-        {scanning && recognizedText && (
+        {recognizedText && !confirmedNumber && phase !== "processing" && (
           <div className="recognized-text">
             <span className="text-label">감지된 숫자</span>
             <span className="text-value">{recognizedText}</span>
@@ -51,22 +51,20 @@ export default function ResultDisplay({
         </div>
       )}
 
-      {/* 액션 버튼 */}
-      <div className="action-buttons">
-        <button className="action-btn reset-btn" onClick={onReset}>
-          <RotateCcw size={18} />
-          <span>다시 촬영</span>
-        </button>
+      {/* 액션 버튼 — 결과가 있을 때만 표시 */}
+      {confirmedNumber && (
+        <div className="action-buttons">
+          <button className="action-btn reset-btn" onClick={onReset}>
+            <RotateCcw size={18} />
+            <span>다시 촬영</span>
+          </button>
 
-        <button
-          className="action-btn copy-btn"
-          onClick={onCopy}
-          disabled={!confirmedNumber}
-        >
-          {copied ? <Check size={18} /> : <Copy size={18} />}
-          <span>{copied ? "복사됨!" : "복사하기"}</span>
-        </button>
-      </div>
+          <button className="action-btn copy-btn" onClick={onCopy}>
+            {copied ? <Check size={18} /> : <Copy size={18} />}
+            <span>{copied ? "복사됨!" : "복사하기"}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

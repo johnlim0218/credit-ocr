@@ -15,8 +15,8 @@ async function getWorker() {
       logger: () => {},
     });
     await worker.setParameters({
-      tessedit_char_whitelist: "0123456789",
-      tessedit_pageseg_mode: "7", // Single text line
+      tessedit_char_whitelist: "0123456789 ",
+      tessedit_pageseg_mode: "6", // Uniform block of text
     });
   }
   return worker;
@@ -30,8 +30,25 @@ async function getWorker() {
 export async function recognizeCardNumber(canvas) {
   const w = await getWorker();
   const { data } = await w.recognize(canvas);
-  // 숫자만 추출
-  return data.text.replace(/\D/g, "");
+
+  // 숫자만 추출하고 13자리 이상 연속 숫자열 찾기
+  const allDigits = data.text.replace(/\D/g, "");
+
+  // 전체가 13~19자리이면 그대로 반환
+  if (allDigits.length >= 13 && allDigits.length <= 19) {
+    return allDigits;
+  }
+
+  // 텍스트에서 4자리 그룹 패턴 (XXXX XXXX XXXX XXXX) 찾기
+  const groups = data.text.match(/\d{4}/g);
+  if (groups && groups.length >= 3) {
+    const joined = groups.join("");
+    if (joined.length >= 13 && joined.length <= 19) {
+      return joined;
+    }
+  }
+
+  return allDigits;
 }
 
 /**
